@@ -1,0 +1,151 @@
+# jenkins.yaml
+# --- 1. Namespace ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+---
+# --- 2. PersistentVolume (Tự động tạo thư mục) ---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jenkins-pv
+spec:
+  capacity:
+    storage: 8Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /tmp/jenkins-data  # K8s sẽ tự tạo thư mục này
+    type: DirectoryOrCreate  # Tự động tạo nếu chưa có
+---
+# --- 3. Service Account & Role Binding ---
+# Cung cấp quyền hạn cần thiết cho Jenkins
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-admin
+  namespace: jenkins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jenkins-admin-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "events", "configmaps", "secrets"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets", "replicasets", "statefulsets"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jenkins-admin-binding
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-admin
+    namespace: jenkins
+roleRef:
+  kind: ClusterRole
+  name: jenkins-admin-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# --- 4. Persistent Volume Claim ---
+# Yêu cầu một không gian lưu trữ để dữ liệu Jenkins không bị mất
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-pvc
+  namespace: jenkins
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 8Gi
+---
+# --- 5. Jenkins Deployment ---
+# Định nghĩa cách chạy Pod Jenkins
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+  namespace: jenkins
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jenkins
+  template:
+    metadata:
+      labels:
+        app: jenkins
+    spec:
+      serviceAccountName: jenkins-admin
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: jenkins
+          image: jenkins/jenkins:lts-jdk11
+          ports:
+            - containerPort: 8080
+            - containerPort: 50000
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          env:
+            - name: JAVA_OPTS
+              value: "-Xmx1024m"
+          volumeMounts:
+            - name: jenkins-home
+              mountPath: /var/jenkins_home
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: jenkins-home
+          persistentVolumeClaim:
+            claimName: jenkins-pvc
+---
+# --- 6. Jenkins Service ---
+# Lộ Jenkins ra ngoài để có thể truy cập
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-service
+  namespace: jenkins
+spec:
+  type: NodePort
+  selector:
+    app: jenkins
+  ports:
+    - name: httpport
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080  # Cố định port để dễ nhớ
+    - name: jnlpport
+      port: 50000
+      targetPort: 50000
+      nodePort: 30050
