@@ -1,0 +1,57 @@
+spec:
+  # --- VOLUMES ---
+  volumes:
+    # 1. Workspace
+    - name: workspace-volume
+      emptyDir: {}
+      
+    # 2. Secret chứa credential (CHỈ ĐỌC)
+    - name: docker-config-secret
+      secret:
+        secretName: dockerhub-credentials
+        
+    # 3. Thư mục trống cho Docker client (CÓ THỂ GHI)
+    - name: docker-writable-dir
+      emptyDir: {}
+
+    # 4. Kernel modules
+    - name: lib-modules
+      hostPath:
+        path: /lib/modules
+
+  # --- CONTAINERS ---
+  containers:
+    # 1. DIND Server
+    - name: dind
+      image: docker:20.10.17-dind
+      securityContext:
+        privileged: true
+      command: ["dockerd"]
+      args:
+        - "--host=unix:///var/run/docker.sock"
+        - "--host=tcp://0.0.0.0:2375"
+      volumeMounts:
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
+        - name: lib-modules
+          mountPath: /lib/modules
+          readOnly: true
+
+    # 2. Docker Client
+    - name: docker
+      image: docker:latest
+      command: ["sleep"]
+      args: ["infinity"]
+      env:
+        - name: DOCKER_HOST
+          value: "tcp://localhost:2375"
+      volumeMounts:
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
+        # Mount secret vào thư mục tạm (chỉ đọc)
+        - name: docker-config-secret
+          mountPath: /tmp/docker-config-secret
+          readOnly: true
+        # Mount thư mục trống vào ~/.docker (có thể ghi)
+        - name: docker-writable-dir
+          mountPath: /root/.docker
